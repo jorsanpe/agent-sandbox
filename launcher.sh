@@ -1,17 +1,56 @@
 #!/usr/bin/env bash
-# agent-sandbox-managed-wrapper-v4
+# agent-sandbox-managed-wrapper-v6
 set -euo pipefail
 
 die() { printf 'agent-sandbox: %s\n' "$*" >&2; exit 2; }
 agent=${0##*/}
-case "$agent" in claude|codex|sandbox-tools) ;; *) die 'Run install.sh to install the wrappers.' ;; esac
+case "$agent" in claude|codex|agent-sandbox) ;; *) die 'Run install.sh to install the wrappers.' ;; esac
 command -v docker >/dev/null || die 'Docker is required.'
 agent_uid=$(id -u)
 agent_gid=$(id -g)
 [[ $agent_uid != 0 ]] || die 'Run as your regular, non-root user.'
 image="agent-sandbox:dev-$agent_uid"
 
-if [[ $agent == sandbox-tools ]]; then
+if [[ $agent == agent-sandbox ]]; then
+  case "${1:-}" in
+    --help|-h)
+      cat <<'EOF'
+Usage: agent-sandbox [COMMAND [ARG...]]
+       agent-sandbox upgrade [all|agents|system|npm]
+
+With no command, open a shell to install shared tools.
+Upgrade targets (default: all):
+  agents  Install the latest Codex and Claude Code releases.
+  system  Upgrade installed Debian packages from configured repositories.
+  npm     Update global npm packages within their declared version ranges.
+  all     Run system, npm, and agent upgrades.
+
+Node.js and Go runtimes are not upgraded by this command.
+Changes are saved to the shared image only after a successful command.
+EOF
+      exit 0
+      ;;
+    upgrade)
+      (( $# <= 2 )) || die 'Usage: agent-sandbox upgrade [all|agents|system|npm]'
+      upgrade_target=${2:-all}
+      case "$upgrade_target" in all|agents|system|npm) ;; *) die "Unknown upgrade target: $upgrade_target" ;; esac
+      set -- bash -euo pipefail -c '
+        target=$1
+        if [[ $target == all || $target == system ]]; then
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get -y upgrade
+        fi
+        if [[ $target == all || $target == npm ]]; then
+          npm update --global
+        fi
+        if [[ $target == all || $target == agents ]]; then
+          npm install --global @openai/codex@latest @anthropic-ai/claude-code@latest
+          { codex --version; claude --version; } > /opt/agent-versions.txt
+        fi
+      ' sandbox-upgrade "$upgrade_target"
+      ;;
+  esac
   command -v flock >/dev/null || die 'flock (util-linux) is required.'
   lock_dir="$HOME/.local/state/agent-sandbox"
   mkdir -p -- "$lock_dir"

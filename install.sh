@@ -19,11 +19,11 @@ chmod 700 "$lock_dir"
 exec 9>"$lock_dir/tools.lock"
 flock -n 9 || die 'Another tool-installation or setup session is running.'
 
-for agent in claude codex sandbox-tools; do
+for agent in claude codex agent-sandbox; do
   target="$bin_dir/$agent"
   if [[ -e $target || -L $target ]]; then
     [[ ! -L $target && -f $target ]] || die "$target already exists; move it aside yourself first."
-    grep -Eq '^# agent-sandbox-managed-wrapper-v[234]$' "$target" || die "$target already exists; move it aside yourself first."
+    grep -Eq '^# agent-sandbox-managed-wrapper-v[23456]$' "$target" || die "$target already exists; move it aside yourself first."
   fi
 done
 
@@ -45,9 +45,15 @@ for agent in claude codex; do
     'chown "$1:$2" /state && chmod 700 /state' sh "$agent_uid" "$agent_gid"
 done
 mkdir -p -- "$bin_dir"
-for agent in claude codex sandbox-tools; do
+for agent in claude codex agent-sandbox; do
   install -m 0755 "$source_dir/launcher.sh" "$bin_dir/$agent"
 done
+# Remove only our old wrapper; leave unrelated files and symlinks untouched.
+legacy_wrapper="$bin_dir/sandbox-tools"
+if [[ -f $legacy_wrapper && ! -L $legacy_wrapper ]] &&
+   grep -Eq '^# agent-sandbox-managed-wrapper-v[2345]$' "$legacy_wrapper"; then
+  rm -- "$legacy_wrapper"
+fi
 # Existing shared images are preserved, so migrate required CLI dependencies
 # through the persistent tools environment instead of replacing user installs.
 dependency_status=0
@@ -60,20 +66,21 @@ case "$dependency_status" in
   42)
     flock -u 9
     exec 9>&-
-    "$bin_dir/sandbox-tools" sh -c 'apt-get update && apt-get install -y --no-install-recommends openssh-client procps && if ! getent passwd "$1" >/dev/null; then usermod -u "$1" node; fi' sh "$agent_uid"
+    "$bin_dir/agent-sandbox" sh -c 'apt-get update && apt-get install -y --no-install-recommends openssh-client procps && if ! getent passwd "$1" >/dev/null; then usermod -u "$1" node; fi' sh "$agent_uid"
     ;;
   *) die "Could not check image dependencies (Docker exit $dependency_status)." ;;
 esac
 cat <<'EOF'
-Installed ~/.local/bin/claude, codex, and sandbox-tools.
+Installed ~/.local/bin/claude, codex, and agent-sandbox.
 
 Run in your current terminal, and add the export line to ~/.bashrc (or ~/.zshrc):
   export PATH="$HOME/.local/bin:$PATH"
   hash -r
 
 Then cd into a project and run claude or codex normally.
-Go and Node/npm are included. Run sandbox-tools to install more tools;
+Go and Node/npm are included. Run agent-sandbox to install more tools;
 exit that shell to save them for future sessions of both agents.
+Run agent-sandbox upgrade to upgrade system packages, global npm tools, and agents.
 For first-time Codex subscription login: codex login --device-auth
 Claude prompts for login on its first interactive launch.
 Your existing SSH agent is forwarded automatically when SSH_AUTH_SOCK is set.
