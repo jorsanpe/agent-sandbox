@@ -39,6 +39,43 @@ export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` on the host for API billing.
 Only the matching agent's key is forwarded. Codex saves its key through CLI
 login in its persistent home. Host logins/settings are not imported automatically.
 
+## Git over SSH
+
+When your host shell has `SSH_AUTH_SOCK` set, the wrappers automatically forward
+that agent socket to Claude/Codex sessions. Git uses the keys already loaded in
+the agent. Private-key files and your host `~/.ssh/config` are never mounted.
+If no SSH agent is running, coding sessions still work, but SSH authentication
+is not provided. Load your usual key on the host with `ssh-add` if needed.
+
+Your existing `~/.ssh/known_hosts` file is mounted read-only when present. Git is
+configured to require a matching trusted host key: unknown or changed hosts
+fail rather than prompting or being accepted automatically. First verify/trust
+the Git server on your host, then launch a new agent session. For GitHub, compare
+the host fingerprint with [GitHub's published fingerprints](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints).
+No `ssh-keyscan` output is automatically trusted. No known_hosts file is also
+allowed at launch, but SSH Git operations fail until trust has been configured.
+
+Disable forwarding for one session with `AGENT_SANDBOX_SSH=0 codex` (or `claude`),
+or export that setting in your shell to disable it by default. When enabled,
+Git's `GIT_SSH_COMMAND` selects the forwarded agent and mounted known_hosts;
+host SSH aliases, ProxyJump rules, and IdentityFile settings are not imported.
+These settings apply to Git's SSH transport; arbitrary direct `ssh` invocations
+need their own host-key options. Use `git ls-remote origin` inside an agent
+session to check authentication without pushing changes.
+
+Forwarding gives the session access to every identity loaded in that agent.
+Code can request authentication/signatures and interact with the agent protocol
+while connected; a read-only socket mount does not restrict those operations.
+This is not a repository permission boundary. A dedicated agent with only the
+intended Git key is optional if you want a narrower scope. Avoid running
+untrusted code with a forwarded agent. Tools-installation sessions never get
+this socket or the known_hosts mount, even when forwarding is enabled.
+
+For an existing installation, rerun `./install.sh` from the updated bundle.
+It preserves installed tools and CLI state, adds `openssh-client`/`procps` if
+missing, and ensures the runtime UID has a passwd entry needed by OpenSSH.
+You do not need to copy keys, recreate volumes, or reauthenticate the CLIs.
+
 ## Install tools without rebuilding
 
 Open the shared installation environment:
@@ -111,7 +148,8 @@ still share their agent's state and any explicitly shared project directory.
 Agent sessions run with your non-root UID/GID, a read-only root filesystem,
 all Linux capabilities dropped, no privilege escalation, and default Docker
 seccomp. Limits are 2 CPUs, 4 GiB RAM without swap, and 512 processes. No host
-home, SSH agent, Docker socket, host namespaces, or published ports are provided.
+home, Docker socket, host namespaces, or published ports are provided. SSH-agent
+access is the explicit file/socket exception described above and can be disabled.
 Codex uses `sandbox_mode="danger-full-access"` with
 `approval_policy="on-request"`: Docker supplies the isolation boundary, so Codex
 does not attempt to start an incompatible nested bubblewrap sandbox. This removes
@@ -125,8 +163,10 @@ bind mounts, credential volumes, Docker socket, or forwarded API keys. Only you
 launch it from the host. A separate offline initialization helper sets ownership
 on state volumes during setup. Agent sessions get neither helper's capabilities.
 
-Only the current host directory is mounted. Parent/sibling projects and files
-outside it are inaccessible by path; nested mounts are excluded. Broad system
+Only the current host directory is mounted as a directory. SSH forwarding also
+mounts the exact agent socket and known_hosts file; no entire SSH directory is
+exposed. Parent/sibling projects remain inaccessible by path; nested mounts are
+excluded. Broad system
 directories and the entire host home are rejected. Linked Git worktrees are
 rejected because their external Git metadata would require an additional mount.
 Use standalone clones without secrets, host sockets, or hard links to sensitive
@@ -157,8 +197,9 @@ To install this wrapper-only fix without rebuilding, run from this bundle:
 
 ## Updates
 
-Rerunning `install.sh` updates host wrappers and builds the starting image, but
-preserves an existing shared tools image and installation container. Rebuilding
+Rerunning `install.sh` updates host wrappers and builds the starting image,
+preserving an existing tools environment and upgrading missing SSH/process
+dependencies and UID lookup support through `sandbox-tools`. Rebuilding
 the starting image alone does not replace your installed environment. Update
 tools through `sandbox-tools`, e.g. `npm install -g @openai/codex
 @anthropic-ai/claude-code`, or use Debian's package manager in that shell.
@@ -179,6 +220,13 @@ the tools-container lifecycle, snapshot configuration, lock contention, and
 failure handling. Docker is unavailable in the authoring environment: image
 builds, actual package installation, login, terminal signals, and kernel isolation
 have not been verified on a running Docker engine.
+
+SSH-specific checks use simulated socket-type checks and mocked Docker calls to
+verify forwarding/opt-out branches, exact read-only mounts, strict Git host-key
+settings, no forwarding to the tools container, and upgrade handling. Real SSH
+options are checked with `ssh -G` without connecting. This environment prohibits
+creating Unix sockets, so live socket forwarding remains untested. No real SSH
+agent, private keys, or remote Git service is used in these checks.
 
 ## Official references
 

@@ -23,11 +23,11 @@ for agent in claude codex sandbox-tools; do
   target="$bin_dir/$agent"
   if [[ -e $target || -L $target ]]; then
     [[ ! -L $target && -f $target ]] || die "$target already exists; move it aside yourself first."
-    grep -Eq '^# agent-sandbox-managed-wrapper-v[23]$' "$target" || die "$target already exists; move it aside yourself first."
+    grep -Eq '^# agent-sandbox-managed-wrapper-v[234]$' "$target" || die "$target already exists; move it aside yourself first."
   fi
 done
 
-docker build --pull -t "$base_image" "$@" "$source_dir"
+docker build --pull -t "$base_image" --build-arg "SANDBOX_UID=$agent_uid" "$@" "$source_dir"
 if docker image inspect "$image" >/dev/null 2>&1; then
   printf 'Keeping your existing shared tools image: %s\n' "$image"
 else
@@ -48,6 +48,22 @@ mkdir -p -- "$bin_dir"
 for agent in claude codex sandbox-tools; do
   install -m 0755 "$source_dir/launcher.sh" "$bin_dir/$agent"
 done
+# Existing shared images are preserved, so migrate required CLI dependencies
+# through the persistent tools environment instead of replacing user installs.
+dependency_status=0
+docker run --rm --read-only --network none --cap-drop ALL \
+  --security-opt no-new-privileges:true --user "$agent_uid:$agent_gid" \
+  --entrypoint /bin/sh "$image" -c \
+  'command -v ssh >/dev/null && command -v ps >/dev/null && getent passwd "$1" >/dev/null || exit 42' sh "$agent_uid" || dependency_status=$?
+case "$dependency_status" in
+  0) ;;
+  42)
+    flock -u 9
+    exec 9>&-
+    "$bin_dir/sandbox-tools" sh -c 'apt-get update && apt-get install -y --no-install-recommends openssh-client procps && if ! getent passwd "$1" >/dev/null; then usermod -u "$1" node; fi' sh "$agent_uid"
+    ;;
+  *) die "Could not check image dependencies (Docker exit $dependency_status)." ;;
+esac
 cat <<'EOF'
 Installed ~/.local/bin/claude, codex, and sandbox-tools.
 
@@ -60,5 +76,7 @@ Go and Node/npm are included. Run sandbox-tools to install more tools;
 exit that shell to save them for future sessions of both agents.
 For first-time Codex subscription login: codex login --device-auth
 Claude prompts for login on its first interactive launch.
+Your existing SSH agent is forwarded automatically when SSH_AUTH_SOCK is set.
+Private keys stay on the host. Set AGENT_SANDBOX_SSH=0 to disable forwarding.
 Remove aliases/functions named claude or codex so PATH wins.
 EOF

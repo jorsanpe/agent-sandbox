@@ -8,10 +8,14 @@ COPY --from=go /usr/local/go /usr/local/go
 
 ARG CODEX_VERSION=latest
 ARG CLAUDE_VERSION=latest
+ARG SANDBOX_UID=1000
+
+# OpenSSH requires a passwd entry for the non-root runtime UID.
+RUN if ! getent passwd "$SANDBOX_UID" >/dev/null; then usermod -u "$SANDBOX_UID" node; fi
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       bash ca-certificates curl git ripgrep procps python3 python3-venv build-essential \
+       bash ca-certificates curl git openssh-client ripgrep procps python3 python3-venv build-essential \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install --global \
       "@openai/codex@${CODEX_VERSION}" \

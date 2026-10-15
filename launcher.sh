@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-sandbox-managed-wrapper-v3
+# agent-sandbox-managed-wrapper-v4
 set -euo pipefail
 
 die() { printf 'agent-sandbox: %s\n' "$*" >&2; exit 2; }
@@ -89,6 +89,32 @@ args=(run --rm --init --interactive
   --env "TERM=${TERM:-xterm-256color}"
 )
 if [[ -t 0 && -t 1 ]]; then args+=(--tty); fi
+# Reuse the host's existing SSH agent. Only the socket and known_hosts file are
+# exposed, never private-key files or the host's SSH config. A read-only socket
+# mount still permits authentication requests and other agent protocol operations.
+case "${AGENT_SANDBOX_SSH:-1}" in 0|1) ;; *) die 'AGENT_SANDBOX_SSH must be 0 or 1.' ;; esac
+if [[ ${AGENT_SANDBOX_SSH:-1} == 1 && -n ${SSH_AUTH_SOCK:-} ]]; then
+  [[ -S $SSH_AUTH_SOCK ]] || die 'SSH_AUTH_SOCK is not a socket. Refresh your SSH agent or set AGENT_SANDBOX_SSH=0.'
+  ssh_socket=$(realpath -- "$SSH_AUTH_SOCK")
+  case "$ssh_socket" in
+    *','*|*'"'*|*$'\n'*|*$'\r'*) die 'SSH socket paths cannot contain commas, quotes, or newlines.' ;;
+  esac
+  args+=(--mount "type=bind,src=$ssh_socket,dst=/run/agent-sandbox/ssh-agent,readonly"
+    --env SSH_AUTH_SOCK=/run/agent-sandbox/ssh-agent)
+  known_hosts_in_container=/dev/null
+  if [[ -f $HOME/.ssh/known_hosts ]]; then
+    [[ -r $HOME/.ssh/known_hosts ]] || die 'Your known_hosts file is not readable.'
+    known_hosts=$(realpath -- "$HOME/.ssh/known_hosts")
+    case "$known_hosts" in
+      *','*|*'"'*|*$'\n'*|*$'\r'*) die 'known_hosts paths cannot contain commas, quotes, or newlines.' ;;
+    esac
+    known_hosts_in_container=/run/agent-sandbox/known_hosts
+    args+=(--mount "type=bind,src=$known_hosts,dst=$known_hosts_in_container,readonly")
+  fi
+  # Git reads this command directly; its paths/options are fixed container values.
+  # Unknown hosts fail closed. Trust hosts on the host machine before launching.
+  args+=(--env "GIT_SSH_COMMAND=ssh -F /dev/null -o IdentityAgent=/run/agent-sandbox/ssh-agent -o IdentityFile=none -o UserKnownHostsFile=$known_hosts_in_container -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o ForwardAgent=no")
+fi
 # Forward only the selected provider's key, by name rather than value.
 case "$agent" in
   codex)
