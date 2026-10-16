@@ -4,39 +4,9 @@ Run these commands in a host terminal as the regular user who installed Agent
 Sandbox, with Docker accessible without `sudo`. Do not run them from inside an
 agent session or the tools shell.
 
-## First upgrade from an older installation
-
-Exit any open `agent-sandbox` tools shell. You may leave Claude and Codex sessions
-running, but they keep their existing image until restarted.
-
-In your existing clone of this repository:
-
-```bash
-git pull --ff-only
-./install.sh
-export PATH="$HOME/.local/bin:$PATH"
-hash -r
-agent-sandbox upgrade
-```
-
-If you have local repository edits, commit or otherwise preserve them before
-pulling. `install.sh` refreshes the three managed wrappers and copies the image
-and upgrade definitions to `~/.local/share/agent-sandbox`. It builds the starting
-image but preserves your existing shared tools image and agent volumes. **The
-following `agent-sandbox upgrade` command migrates the existing tools environment.**
-
-Older wrappers already had an `upgrade` command, but it did not upgrade Node, Go,
-or the Debian release. Rerunning the updated installer once is required to enable
-application self-updates and the full upgrade described here. The installer also migrates the old
-`sandbox-tools` wrapper name to `agent-sandbox`.
-
-The full upgrade downloads upstream images and packages, builds a candidate,
-and runs checks. Allow time and disk space for both the candidate and backups.
-No registry push is performed.
-
 ## Routine upgrades
 
-From any host directory:
+Exit any open tools shell, then run from any host directory:
 
 ```bash
 agent-sandbox upgrade
@@ -49,12 +19,20 @@ by the installer. It validates and refreshes the host wrappers, entrypoint, and
 upgrade definitions, then builds the upgraded tools image. No separate pull or
 installer run is needed for routine upgrades. Keep the source checkout available.
 If you move it, rerun `install.sh` from its new location to register that path.
+The checkout needs a branch with a configured upstream and access to its Git remote.
 
 Local checkout changes and diverged history stop the upgrade without overwriting
-your work. A fetch, validation, or application refresh failure prevents the image
+your work. A pull, validation, or application refresh failure prevents the image
 upgrade from starting. If the application refresh succeeds but the later image
 build fails, the refreshed application remains installed and the previous tools
 image remains available. Retry the same command after resolving the build error.
+A pull that succeeded is retained even if a later step fails.
+
+The full upgrade downloads upstream images and packages, builds a candidate,
+and runs checks. Allow time and disk space for both the candidate and backups.
+No registry push is performed. Existing agent sessions can remain running during
+an upgrade; exit and relaunch them afterward to use the new image. The terminal
+window can stay open.
 
 For smaller updates:
 
@@ -65,9 +43,31 @@ For smaller updates:
 | `agent-sandbox upgrade system` | Debian packages within the current Debian release |
 | `agent-sandbox upgrade npm` | Global npm packages within their declared version ranges |
 
-The smaller updates do not refresh the application, replace Node or Go, or change Debian releases. They
-use the existing tools container; failed commands leave changes there for repair,
-without publishing them to agent sessions.
+The smaller updates do not refresh the application, replace Node or Go, or
+change Debian releases. They use the existing tools container; failed commands
+leave changes there for repair, without publishing them to agent sessions.
+
+## One-time setup for older installations
+
+Only installations whose launcher predates application self-updates need this
+bootstrap. From your existing repository clone on the host:
+
+```bash
+git pull --ff-only
+./install.sh
+agent-sandbox upgrade
+```
+
+Commit or otherwise preserve local repository edits before pulling. `install.sh`
+registers the source checkout, refreshes the three managed wrappers and installed
+entrypoint, and copies the image and upgrade definitions to
+`~/.local/share/agent-sandbox`. It builds the starting image but preserves the
+existing shared tools image and agent volumes. The following upgrade migrates
+the existing tools environment. Later upgrades use the single command above.
+
+If command resolution has not been set up, follow the README's PATH export and
+`hash -r` instructions in the current terminal. No terminal restart is required.
+The installer also migrates the former `sandbox-tools` wrapper name.
 
 ## Versions and preserved data
 
@@ -212,7 +212,8 @@ sandbox_backup_suffix='PASTE_TIMESTAMP_AND_PID_HERE'
 
 Restart agent sessions after rollback. This restores the shared environment;
 it does not undo changes agents have already made to projects or their settings
-volumes. The starting `base` image can remain newer: normal sessions use `dev`,
+volumes. It also does not roll back the source checkout, host wrappers, or
+installed entrypoint refreshed during the application update. The starting `base` image can remain newer: normal sessions use `dev`,
 and a future full upgrade rebuilds the base definitions.
 
 Backup images and containers remain on your PC until you remove them. Keep them
@@ -222,10 +223,12 @@ until you have verified the upgraded environment and any custom tools you rely o
 
 The full upgrade reads `~/.local/share/agent-sandbox/Dockerfile`,
 `Upgrade.Dockerfile`, and their support files. The installed defaults match the
-repository at the last installation or full upgrade. Build-arg overrides passed to the
-installer affect that initial build only; they are not persisted for later full
+repository at the last installation or full upgrade. Build-arg overrides passed
+to the installer affect that initial build only; they are not persisted for later full
 upgrades. If you customize the installed definitions, keep a separate copy:
-installation and full upgrades replace these managed files. Keep customized definitions in your source checkout and manage their Git history explicitly.
+installation and full upgrades replace these managed files. Keep customized
+definitions in your source checkout and manage their Git history explicitly.
+Local commits must still permit a fast-forward pull from the configured upstream.
 
 Changing to another distribution or Debian release requires a matching migration
 in `upgrade-image.sh`; changing only the Dockerfile is insufficient.

@@ -73,6 +73,19 @@ existing Codex login is not imported. Run `codex logout` to sign out.
 If the old wrapper switched you to API billing, run `codex login` once after
 installing the updated wrappers to restore your ChatGPT login.
 
+### Finding previous Codex sessions
+
+Run `codex resume --all` to include sessions recorded in other project paths.
+The launcher pins `HOME=/home/node` and `CODEX_HOME=/home/node/.codex` to the
+persistent `agent-sandbox-codex-<your UID>` volume, including after image upgrades.
+The installer reuses that volume and never clears it.
+
+Sessions and credentials from a host installation in `~/.codex` are separate
+from sandbox state. If history disappears, keep both locations and the Docker
+volumes intact while investigating; reinstalling does not import host history.
+For first installation or shell command caching, run the PATH export and
+`hash -r` above in your existing terminal. Neither requires a new terminal.
+
 ### Claude login
 
 Claude prompts for login on its first launch. You can also export
@@ -141,32 +154,26 @@ exit successfully. Avoid entering credentials there: its filesystem becomes
 part of the shared image. Project files and agent login volumes are not mounted
 in this container.
 
-## Upgrade an existing installation
+## Upgrades
 
-In your existing repository clone, update the wrappers and upgrade definitions,
-then migrate the installed tools environment:
+From any host directory, as your regular user:
 
 ```bash
-git pull --ff-only
-./install.sh
-export PATH="$HOME/.local/bin:$PATH"
-hash -r
 agent-sandbox upgrade
 ```
 
-Run these commands from your host terminal as your regular user, without `sudo`.
-Exit any open tools shell first. The full upgrade moves existing Bookworm images
-to Trixie, replaces Node and Go with the installed definitions' versions, and
-updates Debian packages, global npm tools, and both agents. Custom tools are
-carried forward, and the old image and tools container are backed up. Restart
-agent sessions after success; login/settings volumes are preserved.
+Exit any open tools shell first. The command fast-forwards the Git checkout
+registered at installation, refreshes the application and host wrappers, then
+upgrades the tools image. Keep that checkout available and clean; local edits,
+diverged history, or a failed pull stop the upgrade.
 
-For later routine updates, run `agent-sandbox upgrade` again. It fast-forwards
-the source checkout recorded at installation and refreshes the application,
-host wrappers, and upgrade definitions before upgrading the tools image.
-Local edits or diverged Git history stop the update; your work is preserved.
-Older installations need one final `./install.sh` run to enable self-updates.
-Scoped updates remain available:
+The full upgrade migrates Bookworm images to Trixie and updates Node, Go,
+Debian packages, global npm tools, and both agents. Custom tools are carried
+forward. The previous tools image and tools container are backed up; agent
+login/settings volumes are preserved. Exit and relaunch running agents after
+success. Your terminal window can stay open.
+
+For smaller updates that leave the application and base runtimes unchanged:
 
 ```bash
 agent-sandbox upgrade agents  # Latest Codex and Claude Code
@@ -174,10 +181,24 @@ agent-sandbox upgrade system  # Packages within the current Debian release
 agent-sandbox upgrade npm     # Global npm packages within their version ranges
 ```
 
-See the [complete upgrade guide](UPGRADING.md) for supported versions, custom-tool
-handling, verification, failure recovery, rollback commands, and custom defaults.
+### One-time setup for older installations
 
-Exit and relaunch running agents after an upgrade; the terminal window can stay open.
+If your installed launcher predates application self-updates, run this once
+from your existing repository clone on the host:
+
+```bash
+git pull --ff-only
+./install.sh
+agent-sandbox upgrade
+```
+
+If you already installed the self-update version, use only
+`agent-sandbox upgrade`. The PATH export and `hash -r` in the installation
+instructions are needed when setting up command resolution, not on every upgrade.
+If you move the source checkout, rerun `./install.sh` there to register its path.
+
+See the [complete upgrade guide](UPGRADING.md) for verification, failure
+recovery, image rollback, and custom definitions.
 
 ## Default tools
 
@@ -210,22 +231,7 @@ enabled, agent state is shared across that agent's projects, and a forwarded
 SSH agent exposes its loaded identities. Your host home and Docker socket are
 not mounted. Use standalone project clones; linked Git worktrees are unsupported.
 
-### Finding previous Codex sessions
-
-Run `codex resume --all` to include sessions recorded in other project paths.
-The launcher pins `HOME=/home/node` and `CODEX_HOME=/home/node/.codex` to the
-persistent `agent-sandbox-codex-<your UID>` volume, including after image upgrades.
-The installer reuses that volume and never clears it.
-
-Sessions and credentials from a host installation in `~/.codex` are separate
-from sandbox state. If history disappears, keep both locations and the Docker
-volumes intact while investigating; reinstalling does not import host history.
-For first installation or shell command caching, run the PATH export and
-`hash -r` above in your existing terminal. Neither requires a new terminal.
-
-Installation and full upgrades refresh the entrypoint used by new agent containers, including
-containers launched from an existing tools image. No full image upgrade is
-needed to apply entrypoint fixes.
+## Development checks
 
 To verify credential persistence with real Docker and Codex, using only dummy
 credentials in temporary state (no account or network access):
