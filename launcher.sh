@@ -25,7 +25,7 @@ Upgrade targets (default: all):
   npm     Update global npm packages within their declared version ranges.
   all     Upgrade the base OS, Node.js and Go, system packages, npm tools, and agents.
 
-The full upgrade uses the image definitions installed by install.sh.
+The full upgrade first updates Agent Sandbox from its registered Git checkout.
 Changes are saved to the shared image only after a successful command.
 EOF
       exit 0
@@ -62,6 +62,8 @@ EOF
   if [[ ${upgrade_target:-} == all ]]; then
     upgrade_dir="$HOME/.local/share/agent-sandbox"
     [[ -f $upgrade_dir/upgrade.sh ]] || die 'Run the updated install.sh once to install full-upgrade support.'
+    [[ -f $upgrade_dir/refresh-app.sh ]] || die 'Run install.sh once to enable application updates.'
+    bash "$upgrade_dir/refresh-app.sh" "$upgrade_dir"
     bash "$upgrade_dir/upgrade.sh" "$agent_uid" "$agent_gid" "$upgrade_dir"
     exit $?
   fi
@@ -110,18 +112,40 @@ EOF
   exit 0
 fi
 
+# Locate the command without consuming or rewriting the user's arguments.
+command_args=("$@")
+command_index=0
+while (( command_index < ${#command_args[@]} )); do
+  case "${command_args[command_index]}" in
+    -c|--config|-C|--cd|-p|--profile|--enable|--disable|-m|--model)
+      command_index=$((command_index + 2)) ;;
+    --config=*|--cd=*|--profile=*|--enable=*|--disable=*|--model=*|-c?*|-C?*|-p?*|-m?*)
+      command_index=$((command_index + 1)) ;;
+    *) break ;;
+  esac
+done
+command_name=${command_args[command_index]:-}
+auth_command=0
+if [[ $agent == codex && ( $command_name == login || $command_name == logout ) ]]; then
+  auth_command=1
+fi
+
 # Original absolute paths keep per-project session histories distinct.
-project=$(pwd -P)
-host_home=$(cd -- "$HOME" && pwd -P)
-case "$project" in
-  /|/home|/Users|/root|/etc|/usr|/var|/run|/proc|/sys|/dev|/tmp|/opt|/mnt|/media)
-    die 'Choose a project directory, not a broad system directory.' ;;
-esac
-[[ $project != "$host_home" ]] || die 'Refusing to mount your entire home directory. cd into a project first.'
-case "$project" in
-  *','*|*'"'*|*$'\n'*|*$'\r'*) die 'Project paths cannot contain commas, quotes, or newlines.' ;;
-esac
-[[ ! -f .git ]] || die 'Linked Git worktrees need external Git metadata. Use a standalone clone.'
+if (( ! auth_command )); then
+  project=$(pwd -P)
+  host_home=$(cd -- "$HOME" && pwd -P)
+  case "$project" in
+    /|/home|/Users|/root|/etc|/usr|/var|/run|/proc|/sys|/dev|/tmp|/opt|/mnt|/media)
+      die 'Choose a project directory, not a broad system directory.' ;;
+  esac
+  [[ $project != "$host_home" ]] || die 'Refusing to mount your entire home directory. cd into a project first.'
+  case "$project" in
+    *','*|*'"'*|*$'\n'*|*$'\r'*) die 'Project paths cannot contain commas, quotes, or newlines.' ;;
+  esac
+  [[ ! -f .git ]] || die 'Linked Git worktrees need external Git metadata. Use a standalone clone.'
+else
+  project=/tmp
+fi
 state="agent-sandbox-$agent-$agent_uid"
 docker volume inspect "$state" >/dev/null 2>&1 || die 'Persistent state volume is missing. Run install.sh first.'
 
@@ -129,9 +153,20 @@ docker volume inspect "$state" >/dev/null 2>&1 || die 'Persistent state volume i
 # the host network for an explicit login makes that callback reachable by the
 # host browser. Normal agent sessions keep their isolated bridge network.
 network=bridge
-if [[ $agent == codex && ${1:-} == login && ( $# == 1 || ${2:-} == -- ) ]]; then
+if (( auth_command )) && [[ $command_name == login ]]; then
   network=host
+  for option in "${command_args[@]:command_index+1}"; do
+    case "$option" in
+      --device-auth|--with-api-key|--with-access-token|status|help|--help|-h)
+        network=bridge; break ;;
+    esac
+  done
 fi
+entrypoint_file="$HOME/.local/share/agent-sandbox/entrypoint.sh"
+[[ -r $entrypoint_file ]] || die 'Run install.sh to refresh the installed entrypoint.'
+case "$entrypoint_file" in
+  *','*|*'"'*|*$'\n'*|*$'\r'*) die 'Installation paths cannot contain commas, quotes, or newlines.' ;;
+esac
 
 args=(run --rm --init --interactive
   --read-only --user "$agent_uid:$agent_gid"
@@ -140,39 +175,45 @@ args=(run --rm --init --interactive
   --ulimit nofile=4096:4096 --shm-size 128m
   --network "$network" --log-driver none
   --workdir "$project"
-  --mount "type=bind,src=$project,dst=$project,bind-recursive=disabled"
+  --entrypoint /bin/bash
+  --mount "type=bind,src=$entrypoint_file,dst=/run/agent-sandbox-entrypoint.sh,readonly"
   --mount "type=volume,src=$state,dst=/home/node,volume-nocopy"
   --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g,mode=1777
   --env HOME=/home/node
   --env CODEX_HOME=/home/node/.codex
   --env "TERM=${TERM:-xterm-256color}"
 )
+if (( ! auth_command )); then
+  args+=(--mount "type=bind,src=$project,dst=$project,bind-recursive=disabled")
+fi
 if [[ -t 0 && -t 1 ]]; then args+=(--tty); fi
 # Reuse the host's existing SSH agent. Only the socket and known_hosts file are
 # exposed, never private-key files or the host's SSH config. A read-only socket
 # mount still permits authentication requests and other agent protocol operations.
-case "${AGENT_SANDBOX_SSH:-1}" in 0|1) ;; *) die 'AGENT_SANDBOX_SSH must be 0 or 1.' ;; esac
-if [[ ${AGENT_SANDBOX_SSH:-1} == 1 && -n ${SSH_AUTH_SOCK:-} ]]; then
-  [[ -S $SSH_AUTH_SOCK ]] || die 'SSH_AUTH_SOCK is not a socket. Refresh your SSH agent or set AGENT_SANDBOX_SSH=0.'
-  ssh_socket=$(realpath -- "$SSH_AUTH_SOCK")
-  case "$ssh_socket" in
-    *','*|*'"'*|*$'\n'*|*$'\r'*) die 'SSH socket paths cannot contain commas, quotes, or newlines.' ;;
-  esac
-  args+=(--mount "type=bind,src=$ssh_socket,dst=/run/agent-sandbox/ssh-agent,readonly"
-    --env SSH_AUTH_SOCK=/run/agent-sandbox/ssh-agent)
-  known_hosts_in_container=/dev/null
-  if [[ -f $HOME/.ssh/known_hosts ]]; then
-    [[ -r $HOME/.ssh/known_hosts ]] || die 'Your known_hosts file is not readable.'
-    known_hosts=$(realpath -- "$HOME/.ssh/known_hosts")
-    case "$known_hosts" in
-      *','*|*'"'*|*$'\n'*|*$'\r'*) die 'known_hosts paths cannot contain commas, quotes, or newlines.' ;;
+if (( ! auth_command )); then
+  case "${AGENT_SANDBOX_SSH:-1}" in 0|1) ;; *) die 'AGENT_SANDBOX_SSH must be 0 or 1.' ;; esac
+  if [[ ${AGENT_SANDBOX_SSH:-1} == 1 && -n ${SSH_AUTH_SOCK:-} ]]; then
+    [[ -S $SSH_AUTH_SOCK ]] || die 'SSH_AUTH_SOCK is not a socket. Refresh your SSH agent or set AGENT_SANDBOX_SSH=0.'
+    ssh_socket=$(realpath -- "$SSH_AUTH_SOCK")
+    case "$ssh_socket" in
+      *','*|*'"'*|*$'\n'*|*$'\r'*) die 'SSH socket paths cannot contain commas, quotes, or newlines.' ;;
     esac
-    known_hosts_in_container=/run/agent-sandbox/known_hosts
-    args+=(--mount "type=bind,src=$known_hosts,dst=$known_hosts_in_container,readonly")
+    args+=(--mount "type=bind,src=$ssh_socket,dst=/run/agent-sandbox/ssh-agent,readonly"
+      --env SSH_AUTH_SOCK=/run/agent-sandbox/ssh-agent)
+    known_hosts_in_container=/dev/null
+    if [[ -f $HOME/.ssh/known_hosts ]]; then
+      [[ -r $HOME/.ssh/known_hosts ]] || die 'Your known_hosts file is not readable.'
+      known_hosts=$(realpath -- "$HOME/.ssh/known_hosts")
+      case "$known_hosts" in
+        *','*|*'"'*|*$'\n'*|*$'\r'*) die 'known_hosts paths cannot contain commas, quotes, or newlines.' ;;
+      esac
+      known_hosts_in_container=/run/agent-sandbox/known_hosts
+      args+=(--mount "type=bind,src=$known_hosts,dst=$known_hosts_in_container,readonly")
+    fi
+    # Git reads this command directly; its paths/options are fixed container values.
+    # Unknown hosts fail closed. Trust hosts on the host machine before launching.
+    args+=(--env "GIT_SSH_COMMAND=ssh -F /dev/null -o IdentityAgent=/run/agent-sandbox/ssh-agent -o IdentityFile=none -o UserKnownHostsFile=$known_hosts_in_container -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o ForwardAgent=no")
   fi
-  # Git reads this command directly; its paths/options are fixed container values.
-  # Unknown hosts fail closed. Trust hosts on the host machine before launching.
-  args+=(--env "GIT_SSH_COMMAND=ssh -F /dev/null -o IdentityAgent=/run/agent-sandbox/ssh-agent -o IdentityFile=none -o UserKnownHostsFile=$known_hosts_in_container -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o ForwardAgent=no")
 fi
 # Resolve identity on the host, including repository and conditional config.
 # Forward only identity fields, never the host Git config (which may contain
@@ -189,10 +230,9 @@ if command -v git >/dev/null; then
     done
   done
 fi
-# Forward only the selected provider's key, by name rather than value.
+# Codex authentication is explicit: a host API key must never replace a saved
+# ChatGPT login. API-key login still accepts the key through stdin.
 case "$agent" in
-  codex)
-    if [[ -n ${OPENAI_API_KEY:-} ]]; then args+=(--env OPENAI_API_KEY); fi ;;
   claude)
     if [[ -n ${ANTHROPIC_API_KEY:-} ]]; then args+=(--env ANTHROPIC_API_KEY); fi ;;
 esac
@@ -202,9 +242,9 @@ esac
 # by later user CLI options. Do not apply them to auth/help/version operations.
 cli_args=("$agent")
 if [[ $agent == codex ]]; then
-  case "${1:-}" in
+  case "$command_name" in
     login|logout|help|--help|-h|--version|-V|completion) ;;
     *) cli_args+=(-c 'sandbox_mode="danger-full-access"' -c 'approval_policy="on-request"') ;;
   esac
 fi
-exec docker "${args[@]}" "$image" "${cli_args[@]}" "$@"
+exec docker "${args[@]}" "$image" /run/agent-sandbox-entrypoint.sh "${cli_args[@]}" "$@"

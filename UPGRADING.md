@@ -27,7 +27,7 @@ following `agent-sandbox upgrade` command migrates the existing tools environmen
 
 Older wrappers already had an `upgrade` command, but it did not upgrade Node, Go,
 or the Debian release. Rerunning the updated installer once is required to enable
-the full upgrade described here. The installer also migrates the old
+application self-updates and the full upgrade described here. The installer also migrates the old
 `sandbox-tools` wrapper name to `agent-sandbox`.
 
 The full upgrade downloads upstream images and packages, builds a candidate,
@@ -44,21 +44,28 @@ agent-sandbox upgrade
 agent-sandbox upgrade all
 ```
 
-This uses the definitions installed on your PC. To pick up changes from a newer
-version of this repository, run `git pull --ff-only` and `./install.sh` again
-before upgrading. `upgrade` does not pull repository changes or update its own
-host wrappers.
+The full upgrade first runs `git pull --ff-only` in the source checkout recorded
+by the installer. It validates and refreshes the host wrappers, entrypoint, and
+upgrade definitions, then builds the upgraded tools image. No separate pull or
+installer run is needed for routine upgrades. Keep the source checkout available.
+If you move it, rerun `install.sh` from its new location to register that path.
+
+Local checkout changes and diverged history stop the upgrade without overwriting
+your work. A fetch, validation, or application refresh failure prevents the image
+upgrade from starting. If the application refresh succeeds but the later image
+build fails, the refreshed application remains installed and the previous tools
+image remains available. Retry the same command after resolving the build error.
 
 For smaller updates:
 
 | Command | What it updates |
 | --- | --- |
-| `agent-sandbox upgrade` | Base OS, Node, npm, Go, Debian packages, global npm packages, Codex, and Claude Code |
+| `agent-sandbox upgrade` | Application, host wrappers, base OS, Node, npm, Go, Debian packages, global npm packages, Codex, and Claude Code |
 | `agent-sandbox upgrade agents` | Codex and Claude Code to their latest npm releases |
 | `agent-sandbox upgrade system` | Debian packages within the current Debian release |
 | `agent-sandbox upgrade npm` | Global npm packages within their declared version ranges |
 
-The smaller updates do not replace Node or Go or change Debian releases. They
+The smaller updates do not refresh the application, replace Node or Go, or change Debian releases. They
 use the existing tools container; failed commands leave changes there for repair,
 without publishing them to agent sessions.
 
@@ -215,10 +222,10 @@ until you have verified the upgraded environment and any custom tools you rely o
 
 The full upgrade reads `~/.local/share/agent-sandbox/Dockerfile`,
 `Upgrade.Dockerfile`, and their support files. The installed defaults match the
-repository at the last `./install.sh` run. Build-arg overrides passed to the
+repository at the last installation or full upgrade. Build-arg overrides passed to the
 installer affect that initial build only; they are not persisted for later full
 upgrades. If you customize the installed definitions, keep a separate copy:
-rerunning `install.sh` replaces them.
+installation and full upgrades replace these managed files. Keep customized definitions in your source checkout and manage their Git history explicitly.
 
 Changing to another distribution or Debian release requires a matching migration
 in `upgrade-image.sh`; changing only the Dockerfile is insufficient.

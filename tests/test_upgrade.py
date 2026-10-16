@@ -19,8 +19,10 @@ class UpgradeTests(unittest.TestCase):
         resources = self.path / '.local' / 'share' / 'agent-sandbox'
         resources.mkdir(parents=True)
         for name in ('Dockerfile', 'entrypoint.sh', '.dockerignore',
-                     'Upgrade.Dockerfile', 'upgrade-image.sh', 'upgrade.sh'):
+                     'Upgrade.Dockerfile', 'upgrade-image.sh', 'upgrade.sh', 'refresh-app.sh'):
             shutil.copyfile(ROOT / name, resources / name)
+        # Routing tests isolate image upgrade behavior from Git/network updates.
+        (resources / 'refresh-app.sh').write_text('#!/bin/bash\nexit 0\n')
         self.log = self.path / 'docker.jsonl'
         docker = self.path / 'docker'
         docker.write_text('''#!/usr/bin/env python3
@@ -117,6 +119,13 @@ if args[0] == 'exec':
         self.assertFalse(any(c[0] == 'commit' for c in calls))
         self.assertFalse(any(c[:2] == ['container', 'rename'] for c in calls))
 
+    def test_application_refresh_failure_prevents_image_upgrade(self):
+        refresh = self.path / '.local/share/agent-sandbox/refresh-app.sh'
+        refresh.write_text('#!/bin/bash\nexit 23\n')
+        result, calls = self.run_tools('upgrade')
+        self.assertEqual(result.returncode, 23)
+        self.assertEqual(calls, [])
+
     def test_full_upgrade_missing_definitions_explains_bootstrap(self):
         (self.path / '.local/share/agent-sandbox/upgrade.sh').unlink()
         result, calls = self.run_tools('upgrade')
@@ -200,7 +209,35 @@ if args[0] == 'exec':
                 self.assertIn('HOME=/home/node', run)
                 self.assertIn('CODEX_HOME=/home/node/.codex', run)
                 self.assertIn(f'type=volume,src=agent-sandbox-codex-{os.getuid()},dst=/home/node,volume-nocopy', run)
-                self.assertEqual(run[run.index('--workdir') + 1], str(project))
+                self.assertEqual(run[run.index('--workdir') + 1],
+                                 '/tmp' if args and args[0] == 'login' else str(project))
+
+    def test_auth_from_home_ignores_project_and_stale_ssh(self):
+        (self.path / 'codex').symlink_to(ROOT / 'launcher.sh')
+        cases = [(('login', '-c', 'foo=true'), 'host'),
+                 (('-c', 'foo=true', 'login'), 'host'),
+                 (('--config=foo=true', 'login'), 'host'),
+                 (('login', '--device-auth'), 'bridge'),
+                 (('-c', 'foo=true', 'login', 'status'), 'bridge'),
+                 (('logout',), 'bridge')]
+        for args, network in cases:
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                result = subprocess.run([str(self.path / 'codex'), *args],
+                                        cwd=self.path,
+                                        env=dict(self.env, SSH_AUTH_SOCK='/missing/socket'),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                run = next(c for c in calls if c[0] == 'run')
+                self.assertEqual(run[run.index('--network') + 1], network)
+                self.assertEqual(run[run.index('--workdir') + 1], '/tmp')
+                self.assertNotIn('SSH_AUTH_SOCK=/run/agent-sandbox/ssh-agent', run)
+                self.assertNotIn('sandbox_mode="danger-full-access"', run)
+                self.assertFalse(any('dst=' + str(self.path) in a for a in run))
+                self.assertIn(f'type=bind,src={self.path}/.local/share/agent-sandbox/entrypoint.sh,dst=/run/agent-sandbox-entrypoint.sh,readonly', run)
+                self.assertEqual(run[run.index('--entrypoint') + 1], '/bin/bash')
+                self.assertEqual(run[-len(args):], list(args))
 
     def test_host_git_identity_is_forwarded_for_both_agents(self):
         project = self.path / 'identity-project'
@@ -226,6 +263,49 @@ if args[0] == 'exec':
                           'GIT_COMMITTER_EMAIL=project@example.com'):
                 self.assertIn(value, run)
             self.assertFalse(any('.gitconfig' in value for value in run))
+
+    def test_codex_host_api_key_is_not_forwarded(self):
+        (self.path / 'codex').symlink_to(ROOT / 'launcher.sh')
+        project = self.path / 'project'
+        project.mkdir()
+        for args in ((), ('login',), ('login', '--with-api-key'), ('logout',)):
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                result = subprocess.run(
+                    [str(self.path / 'codex'), *args], cwd=project,
+                    env=dict(self.env, AGENT_SANDBOX_SSH='0',
+                             OPENAI_API_KEY='test-key-must-stay-on-host'),
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                run = next(c for c in calls if c[0] == 'run')
+                self.assertFalse(any('OPENAI_API_KEY' in arg or
+                                     'test-key-must-stay-on-host' in arg for arg in run))
+
+    def test_entrypoint_uses_saved_auth_and_preserves_explicit_key_stdin(self):
+        # Stand in for the real CLI and record every invocation, including stdin.
+        cli = self.path / 'codex'
+        cli.write_text('''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ['DOCKER_LOG'], 'a') as log:
+    log.write(json.dumps({'args': sys.argv[1:],
+                         'key_present': 'OPENAI_API_KEY' in os.environ,
+                         'stdin': sys.stdin.read()}) + '\\n')
+''')
+        cli.chmod(0o755)
+        for args, stdin in [((), ''), (('login',), ''),
+                            (('login', '--with-api-key'), 'explicit-test-key\n'),
+                            (('logout',), '')]:
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                result = subprocess.run(
+                    ['bash', str(ROOT / 'entrypoint.sh'), 'codex', *args],
+                    env=dict(self.env, OPENAI_API_KEY='inherited-test-key'),
+                    input=stdin, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                self.assertEqual(calls, [{'args': list(args), 'key_present': False,
+                                         'stdin': stdin}])
 
     def test_installer_preserves_unrelated_legacy_file(self):
         bin_dir = self.path / '.local' / 'bin'

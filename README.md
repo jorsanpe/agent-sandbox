@@ -44,7 +44,7 @@ git diff | claude -p 'Review these changes'
 
 ### Codex login
 
-From your host terminal, inside a project directory, run:
+From any directory in your host terminal, run:
 
 ```bash
 codex login
@@ -52,21 +52,26 @@ codex login
 
 Open the printed URL in your host browser. For this explicit browser login,
 the Linux container uses host networking so the browser callback reaches
-Codex. Normal agent sessions use bridge networking. Credentials are saved in
+Codex. Login and logout do not mount your project or forward SSH.
+Normal agent sessions use bridge networking. Credentials are saved in
 the persistent state volume; upgrades do not require another login.
 
 For a remote machine or an account that supports device authentication, use
 `codex login --device-auth` instead. `codex login status` checks the saved login.
 See the [official authentication guide](https://developers.openai.com/codex/auth).
 
-Alternatively, export `OPENAI_API_KEY` in your host shell and launch `codex`;
-the wrapper logs in with that key for API billing. Unset it before using
-ChatGPT login so the wrapper does not switch back to API-key authentication.
-See the [official Codex authentication guide](https://developers.openai.com/codex/auth).
+The wrapper ignores your host's `OPENAI_API_KEY`, so you can leave it set for
+other tools without changing your saved ChatGPT login. To explicitly select
+API billing, pass the key through stdin:
+
+```bash
+printenv OPENAI_API_KEY | codex login --with-api-key
+```
 
 Credentials persist in Codex's Docker volume across sessions. Your host's
-existing Codex login is not imported. Run `codex logout` to sign out; if you
-exported `OPENAI_API_KEY`, also unset it to prevent automatic login.
+existing Codex login is not imported. Run `codex logout` to sign out.
+If the old wrapper switched you to API billing, run `codex login` once after
+installing the updated wrappers to restore your ChatGPT login.
 
 ### Claude login
 
@@ -156,8 +161,11 @@ updates Debian packages, global npm tools, and both agents. Custom tools are
 carried forward, and the old image and tools container are backed up. Restart
 agent sessions after success; login/settings volumes are preserved.
 
-For later routine updates, run `agent-sandbox upgrade` again. Rerun `install.sh`
-after repository updates to refresh the host wrappers and upgrade definitions.
+For later routine updates, run `agent-sandbox upgrade` again. It fast-forwards
+the source checkout recorded at installation and refreshes the application,
+host wrappers, and upgrade definitions before upgrading the tools image.
+Local edits or diverged Git history stop the update; your work is preserved.
+Older installations need one final `./install.sh` run to enable self-updates.
 Scoped updates remain available:
 
 ```bash
@@ -214,3 +222,18 @@ from sandbox state. If history disappears, keep both locations and the Docker
 volumes intact while investigating; reinstalling does not import host history.
 For first installation or shell command caching, run the PATH export and
 `hash -r` above in your existing terminal. Neither requires a new terminal.
+
+Installation and full upgrades refresh the entrypoint used by new agent containers, including
+containers launched from an existing tools image. No full image upgrade is
+needed to apply entrypoint fixes.
+
+To verify credential persistence with real Docker and Codex, using only dummy
+credentials in temporary state (no account or network access):
+
+```bash
+AGENT_SANDBOX_TEST_IMAGE=agent-sandbox:dev-$(id -u) python3 -m unittest discover -s tests -v
+```
+
+The Docker test checks explicit login, a second container reading the saved
+credentials, and logout. Browser OAuth still requires a manual check with your
+account; the automated tests verify its network routing and argument handling.

@@ -47,9 +47,10 @@ done
 mkdir -p -- "$bin_dir"
 upgrade_dir="$HOME/.local/share/agent-sandbox"
 mkdir -p -- "$upgrade_dir"
-for resource in Dockerfile entrypoint.sh .dockerignore Upgrade.Dockerfile upgrade-image.sh upgrade.sh; do
+for resource in Dockerfile entrypoint.sh .dockerignore Upgrade.Dockerfile upgrade-image.sh upgrade.sh refresh-app.sh; do
   install -m 0644 "$source_dir/$resource" "$upgrade_dir/$resource"
 done
+printf '%s\n' "$source_dir" > "$upgrade_dir/source-dir"
 for agent in claude codex agent-sandbox; do
   install -m 0755 "$source_dir/launcher.sh" "$bin_dir/$agent"
 done
