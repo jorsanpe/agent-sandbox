@@ -202,6 +202,31 @@ if args[0] == 'exec':
                 self.assertIn(f'type=volume,src=agent-sandbox-codex-{os.getuid()},dst=/home/node,volume-nocopy', run)
                 self.assertEqual(run[run.index('--workdir') + 1], str(project))
 
+    def test_host_git_identity_is_forwarded_for_both_agents(self):
+        project = self.path / 'identity-project'
+        project.mkdir()
+        subprocess.run(['git', 'init', '-q', str(project)], check=True)
+        for key, value in [('user.name', 'Project User'), ('user.email', 'project@example.com')]:
+            subprocess.run(['git', '-C', str(project), 'config', key, value], check=True)
+        for agent in ('codex', 'claude'):
+            wrapper = self.path / agent
+            wrapper.symlink_to(ROOT / 'launcher.sh')
+            self.log.unlink(missing_ok=True)
+            env = dict(self.env, AGENT_SANDBOX_SSH='0', GIT_AUTHOR_NAME='Explicit Author')
+            for key in ('GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL'):
+                env.pop(key, None)
+            result = subprocess.run([str(wrapper)], cwd=project, env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+            run = next(c for c in calls if c[0] == 'run')
+            for value in ('GIT_AUTHOR_NAME=Explicit Author',
+                          'GIT_COMMITTER_NAME=Project User',
+                          'GIT_AUTHOR_EMAIL=project@example.com',
+                          'GIT_COMMITTER_EMAIL=project@example.com'):
+                self.assertIn(value, run)
+            self.assertFalse(any('.gitconfig' in value for value in run))
+
     def test_installer_preserves_unrelated_legacy_file(self):
         bin_dir = self.path / '.local' / 'bin'
         bin_dir.mkdir(parents=True)

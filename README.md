@@ -74,6 +74,22 @@ Claude prompts for login on its first launch. You can also export
 `ANTHROPIC_API_KEY` on the host. Each agent's login, settings, and history
 persist across sessions in its own Docker volume.
 
+### Git commit identity
+
+The launcher forwards your host Git `user.name` and `user.email` as author and
+committer environment variables. Repository config and conditional includes
+are resolved in the project before launching the container. Explicit host
+`GIT_AUTHOR_*` and `GIT_COMMITTER_*` identity variables take precedence.
+Only these identity values are forwarded; your host Git configuration stays
+on the host. Each new session picks up changes automatically.
+
+Configure your default identity on the host once if needed:
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+```
+
 ### Git over SSH
 
 Git over SSH uses your host SSH agent when `SSH_AUTH_SOCK` is set. Load your

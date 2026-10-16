@@ -174,6 +174,21 @@ if [[ ${AGENT_SANDBOX_SSH:-1} == 1 && -n ${SSH_AUTH_SOCK:-} ]]; then
   # Unknown hosts fail closed. Trust hosts on the host machine before launching.
   args+=(--env "GIT_SSH_COMMAND=ssh -F /dev/null -o IdentityAgent=/run/agent-sandbox/ssh-agent -o IdentityFile=none -o UserKnownHostsFile=$known_hosts_in_container -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o BatchMode=yes -o ForwardAgent=no")
 fi
+# Resolve identity on the host, including repository and conditional config.
+# Forward only identity fields, never the host Git config (which may contain
+# credentials, helpers, signing commands, or paths unavailable in the sandbox).
+if command -v git >/dev/null; then
+  git_name=$(git config --get user.name || true)
+  git_email=$(git config --get user.email || true)
+  for role in AUTHOR COMMITTER; do
+    for field in NAME EMAIL; do
+      identity_var="GIT_${role}_${field}"
+      if [[ $field == NAME ]]; then identity_value=$git_name; else identity_value=$git_email; fi
+      identity_value=${!identity_var:-$identity_value}
+      if [[ -n $identity_value ]]; then args+=(--env "$identity_var=$identity_value"); fi
+    done
+  done
+fi
 # Forward only the selected provider's key, by name rather than value.
 case "$agent" in
   codex)
