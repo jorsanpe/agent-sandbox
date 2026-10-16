@@ -24,6 +24,7 @@ RUN npm install --global --allow-scripts=@anthropic-ai/claude-code \
     && { codex --version; claude --version; } > /opt/agent-versions.txt
 
 ENV HOME=/home/node \
+    CODEX_HOME=/home/node/.codex \
     PATH="/usr/local/go/bin:/home/node/go/bin:/home/node/.local/bin:${PATH}" \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1

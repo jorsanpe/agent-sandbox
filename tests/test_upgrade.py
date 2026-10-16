@@ -162,6 +162,46 @@ if args[0] == 'exec':
         self.assertEqual((self.path / '.local/share/agent-sandbox/upgrade.sh').read_text(),
                          (ROOT / 'upgrade.sh').read_text())
 
+    def test_installer_can_refresh_v7_and_be_rerun(self):
+        bin_dir = self.path / '.local' / 'bin'
+        bin_dir.mkdir(parents=True)
+        for name in ('codex', 'claude', 'agent-sandbox'):
+            (bin_dir / name).write_text('#!/bin/bash\n# agent-sandbox-managed-wrapper-v7\n')
+        for _ in range(2):
+            result = subprocess.run(['bash', str(ROOT / 'install.sh')],
+                                    env=self.env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any(c[:2] == ['volume', 'rm'] for c in calls))
+        states = [c[2] for c in calls if c[:2] == ['volume', 'create']]
+        uid = os.getuid()
+        self.assertEqual(states, [f'agent-sandbox-{a}-{uid}'
+                                 for _ in range(2) for a in ('claude', 'codex')])
+
+    def test_codex_state_and_login_network(self):
+        codex = self.path / 'codex'
+        codex.symlink_to(ROOT / 'launcher.sh')
+        project = self.path / 'project'
+        project.mkdir()
+        for args, network in [((), 'bridge'), (('resume', '--all'), 'bridge'),
+                              (('login',), 'host'),
+                              (('login', '--device-auth'), 'bridge'),
+                              (('login', 'status'), 'bridge')]:
+            with self.subTest(args=args):
+                self.log.unlink(missing_ok=True)
+                result = subprocess.run([str(codex), *args], cwd=project,
+                                        env=dict(self.env, AGENT_SANDBOX_SSH='0'),
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+                run = next(c for c in calls if c[0] == 'run')
+                self.assertEqual(run[run.index('--network') + 1], network)
+                self.assertEqual(run.count('--network'), 1)
+                self.assertIn('HOME=/home/node', run)
+                self.assertIn('CODEX_HOME=/home/node/.codex', run)
+                self.assertIn(f'type=volume,src=agent-sandbox-codex-{os.getuid()},dst=/home/node,volume-nocopy', run)
+                self.assertEqual(run[run.index('--workdir') + 1], str(project))
+
     def test_installer_preserves_unrelated_legacy_file(self):
         bin_dir = self.path / '.local' / 'bin'
         bin_dir.mkdir(parents=True)

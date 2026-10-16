@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-sandbox-managed-wrapper-v7
+# agent-sandbox-managed-wrapper-v8
 set -euo pipefail
 
 die() { printf 'agent-sandbox: %s\n' "$*" >&2; exit 2; }
@@ -99,12 +99,14 @@ EOF
     exit "$result"
   fi
   docker commit \
+    --change 'ENV HOME=/home/node' \
+    --change 'ENV CODEX_HOME=/home/node/.codex' \
     --change 'USER node' \
     --change 'WORKDIR /workspace' \
     --change 'ENTRYPOINT ["/usr/local/bin/agent-entrypoint"]' \
     --change 'CMD ["shell"]' \
     "$tools_container" "$image" >/dev/null
-  printf 'Tools saved. New claude and codex sessions will use them.\n' >&2
+  printf 'Tools saved. Exit and relaunch running agents to use them; your terminal can stay open.\n' >&2
   exit 0
 fi
 
@@ -123,16 +125,26 @@ esac
 state="agent-sandbox-$agent-$agent_uid"
 docker volume inspect "$state" >/dev/null 2>&1 || die 'Persistent state volume is missing. Run install.sh first.'
 
+# Browser OAuth listens on loopback inside the container. On Linux, sharing
+# the host network for an explicit login makes that callback reachable by the
+# host browser. Normal agent sessions keep their isolated bridge network.
+network=bridge
+if [[ $agent == codex && ${1:-} == login && ( $# == 1 || ${2:-} == -- ) ]]; then
+  network=host
+fi
+
 args=(run --rm --init --interactive
   --read-only --user "$agent_uid:$agent_gid"
   --cap-drop ALL --security-opt no-new-privileges:true
   --pids-limit 512 --memory 4g --memory-swap 4g --cpus 2
   --ulimit nofile=4096:4096 --shm-size 128m
-  --network bridge --log-driver none
+  --network "$network" --log-driver none
   --workdir "$project"
   --mount "type=bind,src=$project,dst=$project,bind-recursive=disabled"
   --mount "type=volume,src=$state,dst=/home/node,volume-nocopy"
   --tmpfs /tmp:rw,exec,nosuid,nodev,size=1g,mode=1777
+  --env HOME=/home/node
+  --env CODEX_HOME=/home/node/.codex
   --env "TERM=${TERM:-xterm-256color}"
 )
 if [[ -t 0 && -t 1 ]]; then args+=(--tty); fi

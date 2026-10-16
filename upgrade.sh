@@ -73,4 +73,4 @@ fi
 docker image tag "$candidate" "$image"
 docker image tag "$target" "$base"
 publishing=0
-printf 'Full upgrade saved. Restart agents to use it. Backup: %s\n' "$backup"
+printf 'Full upgrade saved. Exit and relaunch agents to use it; your terminal can stay open. Backup: %s\n' "$backup"

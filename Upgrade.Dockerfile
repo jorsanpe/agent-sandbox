@@ -12,7 +12,7 @@ COPY --from=target /etc/apt/sources.list.d/debian.sources /opt/agent-sandbox-upg
 COPY --from=target /usr/share/keyrings /opt/agent-sandbox-upgrade/keyrings
 COPY upgrade-image.sh /opt/agent-sandbox-upgrade/upgrade-image.sh
 RUN bash /opt/agent-sandbox-upgrade/upgrade-image.sh
-ENV HOME=/home/node PATH="/usr/local/go/bin:/home/node/go/bin:/home/node/.local/bin:${PATH}" \
+ENV HOME=/home/node CODEX_HOME=/home/node/.codex PATH="/usr/local/go/bin:/home/node/go/bin:/home/node/.local/bin:${PATH}" \
     DISABLE_AUTOUPDATER=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 USER node
 WORKDIR /workspace

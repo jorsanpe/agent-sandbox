@@ -44,25 +44,20 @@ git diff | claude -p 'Review these changes'
 
 ### Codex login
 
-From your host terminal, inside a project directory, sign in with your ChatGPT
-account using device authentication:
+From your host terminal, inside a project directory, run:
 
 ```bash
-codex login --device-auth
+codex login
 ```
 
-Open the URL printed in the terminal in your host browser, sign in, and enter
-the one-time code. Wait for the terminal to confirm success, then run:
+Open the printed URL in your host browser. For this explicit browser login,
+the Linux container uses host networking so the browser callback reaches
+Codex. Normal agent sessions use bridge networking. Credentials are saved in
+the persistent state volume; upgrades do not require another login.
 
-```bash
-codex login status
-codex
-```
-
-If device login is disabled, enable it in your ChatGPT security settings or
-ask your workspace administrator to enable it. Use device authentication for
-this setup: plain `codex login` uses a localhost browser callback, and the
-container does not publish that port to the host.
+For a remote machine or an account that supports device authentication, use
+`codex login --device-auth` instead. `codex login status` checks the saved login.
+See the [official authentication guide](https://developers.openai.com/codex/auth).
 
 Alternatively, export `OPENAI_API_KEY` in your host shell and launch `codex`;
 the wrapper logs in with that key for API billing. Unset it before using
@@ -158,6 +153,8 @@ agent-sandbox upgrade npm     # Global npm packages within their version ranges
 See the [complete upgrade guide](UPGRADING.md) for supported versions, custom-tool
 handling, verification, failure recovery, rollback commands, and custom defaults.
 
+Exit and relaunch running agents after an upgrade; the terminal window can stay open.
+
 ## Default tools
 
 The default image is based on Debian 13 (Trixie) and includes:
@@ -188,3 +185,16 @@ Agents can modify or delete files in the mounted project. Network access is
 enabled, agent state is shared across that agent's projects, and a forwarded
 SSH agent exposes its loaded identities. Your host home and Docker socket are
 not mounted. Use standalone project clones; linked Git worktrees are unsupported.
+
+### Finding previous Codex sessions
+
+Run `codex resume --all` to include sessions recorded in other project paths.
+The launcher pins `HOME=/home/node` and `CODEX_HOME=/home/node/.codex` to the
+persistent `agent-sandbox-codex-<your UID>` volume, including after image upgrades.
+The installer reuses that volume and never clears it.
+
+Sessions and credentials from a host installation in `~/.codex` are separate
+from sandbox state. If history disappears, keep both locations and the Docker
+volumes intact while investigating; reinstalling does not import host history.
+For first installation or shell command caching, run the PATH export and
+`hash -r` above in your existing terminal. Neither requires a new terminal.
