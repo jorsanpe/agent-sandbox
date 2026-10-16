@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-ARG BASE_IMAGE=node:22-bookworm-slim
-ARG GO_IMAGE=golang:1.27.2-bookworm
+ARG BASE_IMAGE=node:24-trixie-slim
+ARG GO_IMAGE=golang:1.27.2-trixie
 FROM ${GO_IMAGE} AS go
 FROM ${BASE_IMAGE}
 
@@ -17,7 +17,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        bash ca-certificates curl git openssh-client ripgrep procps python3 python3-venv build-essential \
     && rm -rf /var/lib/apt/lists/*
-RUN npm install --global \
+RUN npm install --global --allow-scripts=@anthropic-ai/claude-code \
       "@openai/codex@${CODEX_VERSION}" \
       "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
     && npm cache clean --force \

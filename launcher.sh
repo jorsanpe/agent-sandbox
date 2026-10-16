@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-sandbox-managed-wrapper-v6
+# agent-sandbox-managed-wrapper-v7
 set -euo pipefail
 
 die() { printf 'agent-sandbox: %s\n' "$*" >&2; exit 2; }
@@ -23,9 +23,9 @@ Upgrade targets (default: all):
   agents  Install the latest Codex and Claude Code releases.
   system  Upgrade installed Debian packages from configured repositories.
   npm     Update global npm packages within their declared version ranges.
-  all     Run system, npm, and agent upgrades.
+  all     Upgrade the base OS, Node.js and Go, system packages, npm tools, and agents.
 
-Node.js and Go runtimes are not upgraded by this command.
+The full upgrade uses the image definitions installed by install.sh.
 Changes are saved to the shared image only after a successful command.
 EOF
       exit 0
@@ -34,7 +34,8 @@ EOF
       (( $# <= 2 )) || die 'Usage: agent-sandbox upgrade [all|agents|system|npm]'
       upgrade_target=${2:-all}
       case "$upgrade_target" in all|agents|system|npm) ;; *) die "Unknown upgrade target: $upgrade_target" ;; esac
-      set -- bash -euo pipefail -c '
+      if [[ $upgrade_target != all ]]; then
+        set -- bash -euo pipefail -c '
         target=$1
         if [[ $target == all || $target == system ]]; then
           export DEBIAN_FRONTEND=noninteractive
@@ -45,10 +46,11 @@ EOF
           npm update --global
         fi
         if [[ $target == all || $target == agents ]]; then
-          npm install --global @openai/codex@latest @anthropic-ai/claude-code@latest
+          npm install --global --allow-scripts=@anthropic-ai/claude-code @openai/codex@latest @anthropic-ai/claude-code@latest
           { codex --version; claude --version; } > /opt/agent-versions.txt
         fi
       ' sandbox-upgrade "$upgrade_target"
+      fi
       ;;
   esac
   command -v flock >/dev/null || die 'flock (util-linux) is required.'
@@ -57,6 +59,12 @@ EOF
   chmod 700 "$lock_dir"
   exec 9>"$lock_dir/tools.lock"
   flock -n 9 || die 'Another tool-installation or setup session is running.'
+  if [[ ${upgrade_target:-} == all ]]; then
+    upgrade_dir="$HOME/.local/share/agent-sandbox"
+    [[ -f $upgrade_dir/upgrade.sh ]] || die 'Run the updated install.sh once to install full-upgrade support.'
+    bash "$upgrade_dir/upgrade.sh" "$agent_uid" "$agent_gid" "$upgrade_dir"
+    exit $?
+  fi
   tools_container="agent-sandbox-tools-$agent_uid"
   docker image inspect "$image" >/dev/null 2>&1 || die 'Run install.sh first.'
   if docker container inspect "$tools_container" >/dev/null 2>&1; then

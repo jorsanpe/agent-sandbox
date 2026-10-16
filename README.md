@@ -125,50 +125,50 @@ exit successfully. Avoid entering credentials there: its filesystem becomes
 part of the shared image. Project files and agent login volumes are not mounted
 in this container.
 
-## Upgrade installed tools
+## Upgrade an existing installation
 
-Run from your host terminal to upgrade Debian packages, global npm tools, and
-both coding agents in the shared image:
+In your existing repository clone, update the wrappers and upgrade definitions,
+then migrate the installed tools environment:
 
 ```bash
+git pull --ff-only
+./install.sh
+export PATH="$HOME/.local/bin:$PATH"
+hash -r
 agent-sandbox upgrade
 ```
 
-You can also upgrade a specific group:
+Run these commands from your host terminal as your regular user, without `sudo`.
+Exit any open tools shell first. The full upgrade moves existing Bookworm images
+to Trixie, replaces Node and Go with the installed definitions' versions, and
+updates Debian packages, global npm tools, and both agents. Custom tools are
+carried forward, and the old image and tools container are backed up. Restart
+agent sessions after success; login/settings volumes are preserved.
+
+For later routine updates, run `agent-sandbox upgrade` again. Rerun `install.sh`
+after repository updates to refresh the host wrappers and upgrade definitions.
+Scoped updates remain available:
 
 ```bash
-agent-sandbox upgrade agents  # Latest Codex and Claude Code releases
-agent-sandbox upgrade system  # Installed Debian packages
+agent-sandbox upgrade agents  # Latest Codex and Claude Code
+agent-sandbox upgrade system  # Packages within the current Debian release
 agent-sandbox upgrade npm     # Global npm packages within their version ranges
 ```
 
-Custom tools are preserved. Successful upgrades are saved for new sessions;
-restart running agents to use them. Failed upgrades remain in the tools
-container for repair and are not published to the shared image.
-
-System upgrades use the configured Debian repositories; they do not switch
-Debian releases. Node.js and Go are copied from upstream images and are not
-updated by this command. Upgrade those runtimes manually in `agent-sandbox`
-using their installation instructions. For a fresh installation, select their
-image versions with `./install.sh --build-arg BASE_IMAGE=node:22-bookworm-slim
---build-arg GO_IMAGE=golang:1.27.2-bookworm`. Rebuilding the starting image does
-not replace an existing shared tools image.
-
-Rerun `./install.sh` after updating this repository to refresh the wrappers.
-Existing tools and agent state are preserved.
-This also replaces the former `sandbox-tools` command with `agent-sandbox`.
+See the [complete upgrade guide](UPGRADING.md) for supported versions, custom-tool
+handling, verification, failure recovery, rollback commands, and custom defaults.
 
 ## Default tools
 
-The default image is based on Debian Bookworm and includes:
+The default image is based on Debian 13 (Trixie) and includes:
 
 | Tools | Purpose |
 | --- | --- |
 | OpenAI Codex and Claude Code | Coding agents, installed at their latest versions when the image is built |
-| Node.js 22 and npm | Run JavaScript and install Node.js packages |
+| Node.js 24 LTS and npm | Run JavaScript and install Node.js packages |
 | Go 1.27.2 | Build, test, and install Go programs |
-| Python 3 and `venv` | Run Python and create isolated package environments |
-| GCC, G++, and Make (`build-essential`) | Compile C/C++ code and native dependencies |
+| Python 3.13 and `venv` | Run Python and create isolated package environments |
+| GCC 14, G++ 14, and Make (`build-essential`) | Compile C/C++ code and native dependencies |
 | Git and OpenSSH client | Version control and SSH authentication |
 | Bash | Shell scripts and interactive commands |
 | ripgrep (`rg`) | Search project files quickly |

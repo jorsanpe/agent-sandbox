@@ -1,6 +1,7 @@
 """Exercise upgrade routing and image publication without a Docker daemon."""
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -15,6 +16,11 @@ class UpgradeTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name)
         (self.path / 'agent-sandbox').symlink_to(ROOT / 'launcher.sh')
+        resources = self.path / '.local' / 'share' / 'agent-sandbox'
+        resources.mkdir(parents=True)
+        for name in ('Dockerfile', 'entrypoint.sh', '.dockerignore',
+                     'Upgrade.Dockerfile', 'upgrade-image.sh', 'upgrade.sh'):
+            shutil.copyfile(ROOT / name, resources / name)
         self.log = self.path / 'docker.jsonl'
         docker = self.path / 'docker'
         docker.write_text('''#!/usr/bin/env python3
@@ -22,8 +28,14 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ['DOCKER_LOG'], 'a') as log:
     log.write(json.dumps(args) + '\\n')
+if args[:2] == ['container', 'inspect'] and os.environ.get('NO_TOOLS'):
+    sys.exit(1)
 if args[:3] == ['container', 'inspect', '--format']:
-    print('tools-v3')
+    print(os.environ.get('TOOLS_RUNNING', 'false') if args[3] == '{{.State.Running}}' else 'tools-v3')
+if args[:2] == ['image', 'tag'] and 'upgrade-dev-' in args[2] and os.environ.get('FAIL_PUBLISH'):
+    sys.exit(19)
+if args[0] == os.environ.get('FAIL_COMMAND'):
+    sys.exit(19)
 if args[0] == 'exec':
     sys.exit(int(os.environ.get('EXEC_STATUS', '0')))
 ''')
@@ -40,7 +52,7 @@ if args[0] == 'exec':
         return result, calls
 
     def test_upgrade_targets_are_forwarded_and_saved(self):
-        for target in ('all', 'agents', 'system', 'npm'):
+        for target in ('agents', 'system', 'npm'):
             with self.subTest(target=target):
                 self.log.unlink(missing_ok=True)
                 result, calls = self.run_tools('upgrade', target)
@@ -56,10 +68,64 @@ if args[0] == 'exec':
     def test_default_target(self):
         result, calls = self.run_tools('upgrade')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(next(c for c in calls if c[0] == 'exec')[-1], 'all')
+        builds = [c for c in calls if c[0] == 'build']
+        self.assertEqual(len(builds), 2)
+        self.assertIn('--pull', builds[0])
+        self.assertTrue(all('--no-cache' in c for c in builds))
+        self.assertTrue(any('CURRENT_IMAGE=agent-sandbox:upgrade-source-' in arg
+                            for arg in builds[1]))
+        smoke = next(i for i, c in enumerate(calls) if c[0] == 'run')
+        publish = next(i for i, c in enumerate(calls)
+                       if c[:2] == ['image', 'tag'] and c[-1].startswith('agent-sandbox:dev-')
+                       and '-backup-' not in c[-1])
+        self.assertLess(smoke, publish)
+        self.assertTrue(any(c[:2] == ['container', 'rename'] for c in calls))
+        self.assertFalse(any('volume' in c or '--mount' in c for c in calls))
+
+    def test_full_upgrade_failure_keeps_active_image_and_tools(self):
+        for failure in ('build', 'run'):
+            with self.subTest(failure=failure):
+                self.log.unlink(missing_ok=True)
+                self.env['FAIL_COMMAND'] = failure
+                result, calls = self.run_tools('upgrade', 'all')
+                self.assertEqual(result.returncode, 19, result.stderr)
+                self.assertFalse(any(c[:2] == ['container', 'rename'] for c in calls))
+                self.assertFalse(any(c[:2] == ['image', 'tag'] and c[-1] == 'agent-sandbox:dev-' + str(os.getuid())
+                                     for c in calls))
+
+    def test_full_upgrade_rejects_active_tools(self):
+        self.env['TOOLS_RUNNING'] = 'true'
+        result, calls = self.run_tools('upgrade')
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(any(c[0] in ('build', 'commit') for c in calls))
+
+    def test_publication_failure_restores_tools_and_image(self):
+        self.env['FAIL_PUBLISH'] = '1'
+        result, calls = self.run_tools('upgrade')
+        self.assertEqual(result.returncode, 19, result.stderr)
+        renames = [c for c in calls if c[:2] == ['container', 'rename']]
+        self.assertEqual(len(renames), 2)
+        self.assertEqual(renames[0][2:], list(reversed(renames[1][2:])))
+        self.assertTrue(any(c[:2] == ['image', 'tag'] and '-backup-' in c[2]
+                            and c[-1] == 'agent-sandbox:dev-' + str(os.getuid())
+                            for c in calls))
+
+    def test_full_upgrade_without_tools_uses_shared_image(self):
+        self.env['NO_TOOLS'] = '1'
+        result, calls = self.run_tools('upgrade')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(c[0] == 'commit' for c in calls))
+        self.assertFalse(any(c[:2] == ['container', 'rename'] for c in calls))
+
+    def test_full_upgrade_missing_definitions_explains_bootstrap(self):
+        (self.path / '.local/share/agent-sandbox/upgrade.sh').unlink()
+        result, calls = self.run_tools('upgrade')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('updated install.sh once', result.stderr)
+        self.assertEqual(calls, [])
 
     def test_failed_upgrade_does_not_publish(self):
-        result, calls = self.run_tools('upgrade', status=17)
+        result, calls = self.run_tools('upgrade', 'agents', status=17)
         self.assertEqual(result.returncode, 17)
         self.assertFalse(any(c[0] == 'commit' for c in calls))
         self.assertTrue(any(c[0] == 'stop' for c in calls))
@@ -93,6 +159,8 @@ if args[0] == 'exec':
         self.assertFalse(legacy.exists())
         self.assertEqual((bin_dir / 'agent-sandbox').read_text(),
                          (ROOT / 'launcher.sh').read_text())
+        self.assertEqual((self.path / '.local/share/agent-sandbox/upgrade.sh').read_text(),
+                         (ROOT / 'upgrade.sh').read_text())
 
     def test_installer_preserves_unrelated_legacy_file(self):
         bin_dir = self.path / '.local' / 'bin'
@@ -103,6 +171,19 @@ if args[0] == 'exec':
                                 env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(legacy.read_text(), '#!/bin/bash\necho unrelated\n')
+
+    def test_installer_refreshes_existing_wrappers_without_replacing_tools_image(self):
+        bin_dir = self.path / '.local' / 'bin'
+        bin_dir.mkdir(parents=True)
+        for name in ('codex', 'claude', 'agent-sandbox'):
+            (bin_dir / name).write_text('#!/bin/bash\n# agent-sandbox-managed-wrapper-v6\n')
+        result = subprocess.run(['bash', str(ROOT / 'install.sh')],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name in ('codex', 'claude', 'agent-sandbox'):
+            self.assertEqual((bin_dir / name).read_text(), (ROOT / 'launcher.sh').read_text())
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertFalse(any(c[:2] == ['image', 'tag'] for c in calls))
 
 
 if __name__ == '__main__':

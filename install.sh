@@ -23,7 +23,7 @@ for agent in claude codex agent-sandbox; do
   target="$bin_dir/$agent"
   if [[ -e $target || -L $target ]]; then
     [[ ! -L $target && -f $target ]] || die "$target already exists; move it aside yourself first."
-    grep -Eq '^# agent-sandbox-managed-wrapper-v[23456]$' "$target" || die "$target already exists; move it aside yourself first."
+    grep -Eq '^# agent-sandbox-managed-wrapper-v[234567]$' "$target" || die "$target already exists; move it aside yourself first."
   fi
 done
 
@@ -45,6 +45,11 @@ for agent in claude codex; do
     'chown "$1:$2" /state && chmod 700 /state' sh "$agent_uid" "$agent_gid"
 done
 mkdir -p -- "$bin_dir"
+upgrade_dir="$HOME/.local/share/agent-sandbox"
+mkdir -p -- "$upgrade_dir"
+for resource in Dockerfile entrypoint.sh .dockerignore Upgrade.Dockerfile upgrade-image.sh upgrade.sh; do
+  install -m 0644 "$source_dir/$resource" "$upgrade_dir/$resource"
+done
 for agent in claude codex agent-sandbox; do
   install -m 0755 "$source_dir/launcher.sh" "$bin_dir/$agent"
 done
@@ -80,7 +85,7 @@ Run in your current terminal, and add the export line to ~/.bashrc (or ~/.zshrc)
 Then cd into a project and run claude or codex normally.
 Go and Node/npm are included. Run agent-sandbox to install more tools;
 exit that shell to save them for future sessions of both agents.
-Run agent-sandbox upgrade to upgrade system packages, global npm tools, and agents.
+Run agent-sandbox upgrade to upgrade the base OS, Node, Go, packages, and agents.
 For first-time Codex subscription login: codex login --device-auth
 Claude prompts for login on its first interactive launch.
 Your existing SSH agent is forwarded automatically when SSH_AUTH_SOCK is set.
