@@ -1,10 +1,18 @@
 # Agent Sandbox
 
-Run coding agents in sandboxed Docker environments. Agent Sandbox provides
-`claude` and `codex` commands that start a separate container for each session,
-with access to your current project directory and persistent agent settings.
-Both agents share a development image, so tools installed once are available
-to both.
+Agent Sandbox runs coding agents in isolated Docker containers to keep your
+PC's sensitive files outside their reach. It mounts your current directory so
+agents can work on your project without exposing your entire home directory.
+Agents can modify or delete files in the mounted directory.
+
+The project aims to integrate seamlessly with your usual workflow: launch
+`claude` or `codex` from your terminal as you normally would, while Agent Sandbox
+handles the containers, persistent settings, and shared development environment.
+
+The `claude` and `codex` commands start a separate container for each session,
+with persistent agent settings and basic development software including Git,
+Node.js, Go, Python, and build tools. Both agents share a development image,
+so additional tools installed once are available to both.
 
 ## Installation
 
@@ -23,6 +31,43 @@ Add the `export PATH` line to your `~/.bashrc` or `~/.zshrc`. The installer
 creates `claude`, `codex`, and `agent-sandbox` wrappers in `~/.local/bin`.
 Move any unrelated files already using those names aside before installing,
 and remove shell aliases or functions that override the wrappers.
+
+Installation uses standard Linux `install` and `mkdir` commands for a per-user
+setup, without `sudo`. It does not register a package with `apt` or `dpkg`.
+
+| Location | Contents |
+| --- | --- |
+| `~/.local/bin` | Managed `claude`, `codex`, and `agent-sandbox` commands |
+| `~/.local/share/agent-sandbox` | Entrypoint, upgrade scripts, image definitions, and registered source path |
+| `~/.local/state/agent-sandbox` | Lock file shared by installation, upgrades, tool changes, and uninstall |
+| Docker storage | Shared tools images, tools containers, backups, and separate agent state volumes |
+
+Keep the source checkout for self-updates and access to `uninstall.sh`. The
+installer does not change your shell configuration automatically.
+
+## Uninstall
+
+If the setup does not suit your workflow, close your agent sessions and tools
+shell, then run from the source checkout as your regular user:
+
+```bash
+./uninstall.sh
+hash -r
+```
+
+This removes the managed commands and installed support files. Unrelated
+commands, your source checkout, shell configuration, and Docker resources are
+kept. Saved sessions, credentials, and custom tools remain available if you
+reinstall with `./install.sh`; Docker disk space is not reclaimed by uninstalling.
+The PATH entry can remain if you use `~/.local/bin` for other tools.
+
+Uninstall uses `rm` for known support files and wrappers bearing the managed
+marker, and `rmdir` for the support directory if empty. Unrelated files and
+symlinked commands are left alone. It uses the same lock as installation and
+upgrades, and leaves the lock file in place. Docker does not need to be running.
+Run `./uninstall.sh --help` for a summary. To reclaim Docker storage, review and
+remove the retained Agent Sandbox resources separately; deleting agent state
+volumes also deletes saved sessions and credentials.
 
 ## Usage
 
