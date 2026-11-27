@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agent-sandbox-managed-wrapper-v8
+# agent-sandbox-managed-wrapper-v9
 set -euo pipefail
 
 die() { printf 'agent-sandbox: %s\n' "$*" >&2; exit 2; }
@@ -186,6 +186,27 @@ args=(run --rm --init --interactive
 if (( ! auth_command )); then
   args+=(--mount "type=bind,src=$project,dst=$project,bind-recursive=disabled")
 fi
+# Share host skills, memories, and agent state on every launch. Keep the
+# volume mounted underneath for all other home files and existing saved data.
+host_state_dirs=(".$agent")
+if (( ! auth_command )); then host_state_dirs+=(.agents); fi
+for state_dir in "${host_state_dirs[@]}"; do
+  host_state="$HOME/$state_dir"
+  case "$host_state" in
+    *','*|*'"'*|*$'\n'*|*$'\r'*) die 'Agent state paths cannot contain commas, quotes, or newlines.' ;;
+  esac
+  # Create directories as the invoking user, never as Docker's root user.
+  if [[ ! -e $host_state && ! -L $host_state ]]; then
+    (umask 077; mkdir -p -- "$host_state")
+  fi
+  [[ -d $host_state && -r $host_state && -w $host_state && -x $host_state ]] ||
+    die "Agent state directory must be readable and writable: $host_state"
+  host_state=$(realpath -- "$host_state")
+  case "$host_state" in
+    *','*|*'"'*|*$'\n'*|*$'\r'*) die 'Agent state paths cannot contain commas, quotes, or newlines.' ;;
+  esac
+  args+=(--mount "type=bind,src=$host_state,dst=/home/node/$state_dir,bind-recursive=disabled")
+done
 if [[ -t 0 && -t 1 ]]; then args+=(--tty); fi
 # Reuse the host's existing SSH agent. Only the socket and known_hosts file are
 # exposed, never private-key files or the host's SSH config. A read-only socket

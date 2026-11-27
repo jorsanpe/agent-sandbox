@@ -23,7 +23,7 @@ for agent in claude codex agent-sandbox; do
   target="$bin_dir/$agent"
   if [[ -e $target || -L $target ]]; then
     [[ ! -L $target && -f $target ]] || die "$target already exists; move it aside yourself first."
-    grep -Eq '^# agent-sandbox-managed-wrapper-v[2345678]$' "$target" || die "$target already exists; move it aside yourself first."
+    grep -Eq '^# agent-sandbox-managed-wrapper-v[23456789]$' "$target" || die "$target already exists; move it aside yourself first."
   fi
 done
 
@@ -90,6 +90,7 @@ Run agent-sandbox upgrade to upgrade the base OS, Node, Go, packages, and agents
 For first-time Codex subscription login: codex login
 No terminal restart is needed. Exit and relaunch running agents after upgrades.
 Claude prompts for login on its first interactive launch.
+Host agent folders are mounted automatically for persistent skills and memories.
 Your existing SSH agent is forwarded automatically when SSH_AUTH_SOCK is set.
 Private keys stay on the host. Set AGENT_SANDBOX_SSH=0 to disable forwarding.
 Remove aliases/functions named claude or codex so PATH wins.

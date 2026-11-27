@@ -239,6 +239,75 @@ if args[0] == 'exec':
                 self.assertEqual(run[run.index('--entrypoint') + 1], '/bin/bash')
                 self.assertEqual(run[-len(args):], list(args))
 
+    def run_agent_with_host_state(self, agent, *args, cwd=None):
+        wrapper = self.path / agent
+        if not wrapper.exists():
+            wrapper.symlink_to(ROOT / 'launcher.sh')
+        project = self.path / 'project'
+        project.mkdir(exist_ok=True)
+        self.log.unlink(missing_ok=True)
+        result = subprocess.run(
+            [str(wrapper), *args], cwd=cwd or project,
+            env=dict(self.env, AGENT_SANDBOX_SSH='0'),
+            capture_output=True, text=True)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+        return result, next((c for c in calls if c[0] == 'run'), [])
+
+    def test_host_state_mounts_are_writable_and_agent_specific(self):
+        for agent in ('claude', 'codex'):
+            with self.subTest(agent=agent):
+                result, run = self.run_agent_with_host_state(agent)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for directory in (f'.{agent}', '.agents'):
+                    self.assertIn(
+                        f'type=bind,src={self.path}/{directory},dst=/home/node/{directory},bind-recursive=disabled', run)
+                    self.assertEqual((self.path / directory).stat().st_mode & 0o777, 0o700)
+                other = '.codex' if agent == 'claude' else '.claude'
+                self.assertFalse(any(f'dst=/home/node/{other},' in arg for arg in run))
+                self.assertIn(f'type=volume,src=agent-sandbox-{agent}-{os.getuid()},dst=/home/node,volume-nocopy', run)
+
+    def test_host_state_login_uses_same_codex_folder_without_shared_skills(self):
+        for command in ('login', 'logout'):
+            result, run = self.run_agent_with_host_state('codex', command, cwd=self.path)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(f'type=bind,src={self.path}/.codex,dst=/home/node/.codex,bind-recursive=disabled', run)
+            self.assertFalse(any('dst=/home/node/.agents,' in arg for arg in run))
+            self.assertFalse((self.path / '.agents').exists())
+
+    def test_host_state_preserves_existing_host_files(self):
+        state = self.path / '.claude'
+        state.mkdir()
+        memory = state / 'memory.md'
+        memory.write_text('Keep this memory\n')
+        result, run = self.run_agent_with_host_state('claude')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'type=bind,src={state},dst=/home/node/.claude,bind-recursive=disabled', run)
+        self.assertEqual(memory.read_text(), 'Keep this memory\n')
+
+    def test_host_state_rejects_non_directories(self):
+        (self.path / '.claude').write_text('not a directory')
+        result, run = self.run_agent_with_host_state('claude')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('readable and writable', result.stderr)
+        self.assertEqual(run, [])
+
+    def test_host_state_symlinks_resolve_and_unsafe_paths_are_rejected(self):
+        target = self.path / 'state with spaces'
+        target.mkdir()
+        link = self.path / '.claude'
+        link.symlink_to(target, target_is_directory=True)
+        result, run = self.run_agent_with_host_state('claude')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f'type=bind,src={target},dst=/home/node/.claude,bind-recursive=disabled', run)
+        link.unlink()
+        unsafe = self.path / 'state,with,commas'
+        unsafe.mkdir()
+        link.symlink_to(unsafe, target_is_directory=True)
+        result, run = self.run_agent_with_host_state('claude')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('Agent state paths', result.stderr)
+        self.assertEqual(run, [])
+
     def test_host_git_identity_is_forwarded_for_both_agents(self):
         project = self.path / 'identity-project'
         project.mkdir()

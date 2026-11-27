@@ -99,7 +99,7 @@ Open the printed URL in your host browser. For this explicit browser login,
 the Linux container uses host networking so the browser callback reaches
 Codex. Login and logout do not mount your project or forward SSH.
 Normal agent sessions use bridge networking. Credentials are saved in
-the persistent state volume; upgrades do not require another login.
+your host's `~/.codex` folder; upgrades do not require another login.
 
 For a remote machine or an account that supports device authentication, use
 `codex login --device-auth` instead. `codex login status` checks the saved login.
@@ -113,29 +113,54 @@ API billing, pass the key through stdin:
 printenv OPENAI_API_KEY | codex login --with-api-key
 ```
 
-Credentials persist in Codex's Docker volume across sessions. Your host's
-existing Codex login is not imported. Run `codex logout` to sign out.
+Codex shares your host's `~/.codex` folder, including saved credentials.
+Run `codex logout` to sign out of this shared account.
 If the old wrapper switched you to API billing, run `codex login` once after
 installing the updated wrappers to restore your ChatGPT login.
 
 ### Finding previous Codex sessions
 
 Run `codex resume --all` to include sessions recorded in other project paths.
-The launcher pins `HOME=/home/node` and `CODEX_HOME=/home/node/.codex` to the
-persistent `agent-sandbox-codex-<your UID>` volume, including after image upgrades.
-The installer reuses that volume and never clears it.
+The launcher pins `HOME=/home/node` and `CODEX_HOME=/home/node/.codex`,
+with your host's `~/.codex` mounted at that location, including after upgrades.
 
-Sessions and credentials from a host installation in `~/.codex` are separate
-from sandbox state. If history disappears, keep both locations and the Docker
-volumes intact while investigating; reinstalling does not import host history.
+Previous sandbox sessions and credentials in the Docker state volume are kept,
+but the host folder mount hides them. They are not automatically copied or
+merged into your host state. Keep the volume intact if you need that history.
 For first installation or shell command caching, run the PATH export and
 `hash -r` above in your existing terminal. Neither requires a new terminal.
 
 ### Claude login
 
 Claude prompts for login on its first launch. You can also export
-`ANTHROPIC_API_KEY` on the host. Each agent's login, settings, and history
-persist across sessions in its own Docker volume.
+`ANTHROPIC_API_KEY` on the host. Claude shares the host's `~/.claude` folder;
+its separate `~/.claude.json` file persists in the sandbox Docker volume.
+
+### Share host skills and memories
+
+Agent folders mount automatically as writable directories on every launch.
+Skills added on the host are available in the sandbox, and memories saved in
+these folders persist directly on the host. No configuration is needed.
+
+| Host directory | Container directory | Mounted for |
+| --- | --- | --- |
+| `~/.claude` | `/home/node/.claude` | Claude |
+| `~/.codex` | `/home/node/.codex` | Codex, including login/logout |
+| `~/.agents` | `/home/node/.agents` | Both agents, except login/logout |
+
+Missing directories are created with private permissions. These mounts include
+the entire directory: skills, memories, settings, history, and any credentials
+stored there can be read and changed by the agent. Project-local folders such
+as `.claude` already persist through the project mount. Use paths inside the
+mounted directories when installing skills or choosing where to save memories.
+
+The remaining container home still uses the existing Docker volume. In
+particular, Claude's `~/.claude.json` stays in that volume; the launcher does not
+import that host file or its login settings. Host configuration containing
+absolute paths or symlinks outside the mounted folders may need adjustment.
+
+Existing volume state is kept, but hidden by the host folder mounts; it is not
+copied or merged. Uninstalling does not remove the shared host folders.
 
 ### Git commit identity
 
@@ -273,7 +298,8 @@ sandbox and keeps approvals on request.
 
 Agents can modify or delete files in the mounted project. Network access is
 enabled, agent state is shared across that agent's projects, and a forwarded
-SSH agent exposes its loaded identities. Your host home and Docker socket are
+SSH agent exposes its loaded identities. Each session also exposes
+the agent folders listed above. Your entire host home and Docker socket are
 not mounted. Use standalone project clones; linked Git worktrees are unsupported.
 
 ## Development checks
